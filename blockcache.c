@@ -88,10 +88,16 @@ void lightrec_register_block(struct blockcache *cache, struct block *block)
 
 void lightrec_unregister_block(struct blockcache *cache, struct block *block)
 {
+	struct lightrec_state *state = block->state;
 	u32 pc = kunseg(block->pc);
+	const struct opcode *op;
 	struct block *old = cache->lut[(pc >> 2) & (LUT_SIZE - 1)];
 
-	block->state->code_lut[lut_offset(pc)] = NULL;
+	state->code_lut[lut_offset(pc)] = NULL;
+
+	for (op = block->opcode_list; op; op = op->next)
+		if (op->c.i.op == OP_META_SYNC)
+			state->code_lut[lut_offset(pc) + op->offset] = NULL;
 
 	cache->tiny_lut[(pc >> 2) & (TINY_LUT_SIZE - 1)] = NULL;
 
