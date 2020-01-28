@@ -17,6 +17,8 @@
 
 #ifdef __cplusplus
 extern "C" {
+#else
+#include <stdbool.h>
 #endif
 
 #include <stddef.h>
@@ -55,7 +57,14 @@ struct lightrec_mem_map;
 #define LIGHTREC_EXIT_BREAK	(1 << 1)
 #define LIGHTREC_EXIT_CHECK_INTERRUPT	(1 << 2)
 #define LIGHTREC_EXIT_SEGFAULT	(1 << 3)
+#define LIGHTREC_EXIT_MISC (1 << 4)
 
+#ifdef LIGHTREC_N64_RSP
+enum rsp_map {
+	RSP_MAP_DMEM,
+	RSP_MAP_IMEM,
+};
+#else
 enum psx_map {
 	PSX_MAP_KERNEL_USER_RAM,
 	PSX_MAP_BIOS,
@@ -67,6 +76,7 @@ enum psx_map {
 	PSX_MAP_MIRROR2,
 	PSX_MAP_MIRROR3,
 };
+#endif
 
 enum mem_type {
 	MEM_FOR_CODE,
@@ -93,6 +103,22 @@ struct lightrec_mem_map {
 	const struct lightrec_mem_map *mirror_of;
 };
 
+#ifdef LIGHTREC_N64_RSP
+struct lightrec_ops {
+	/* The RSP is very particular with how COP2 is set up. */
+	u32 (*cop0_mfc)(struct lightrec_state *state, u32 reg);
+	void (*cop0_mtc)(struct lightrec_state *state, u32 reg, u32 value);
+
+	void (*cop2_vecop)(struct lightrec_state *state, u32 OPCODE, u32 op, u32 vd, u32 vs, u32 vt, u32 e);
+	u32 (*cop2_mfc)(struct lightrec_state *state, u32 OPCODE, u32 rd, u32 imm);
+	u32 (*cop2_cfc)(struct lightrec_state *state, u32 OPCODE, u32 rd);
+	void (*cop2_mtc)(struct lightrec_state *state, u32 OPCODE, u32 value, u32 rd, u32 imm);
+	void (*cop2_ctc)(struct lightrec_state *state, u32 OPCODE, u32 value, u32 rd);
+
+	void (*cop2_swc)(struct lightrec_state *state, u32 OPCODE, u32 op, u32 rt, u32 imm, s32 simm, u32 rs);
+	void (*cop2_lwc)(struct lightrec_state *state, u32 OPCODE, u32 op, u32 rt, u32 imm, s32 simm, u32 rs);
+};
+#else
 struct lightrec_cop_ops {
 	u32 (*mfc)(struct lightrec_state *state, u8 reg);
 	u32 (*cfc)(struct lightrec_state *state, u8 reg);
@@ -105,6 +131,7 @@ struct lightrec_ops {
 	struct lightrec_cop_ops cop0_ops;
 	struct lightrec_cop_ops cop2_ops;
 };
+#endif
 
 __api struct lightrec_state *lightrec_init(char *argv0,
 					   const struct lightrec_mem_map *map,
@@ -121,7 +148,7 @@ __api u32 lightrec_run_interpreter(struct lightrec_state *state, u32 pc);
 __api void lightrec_invalidate(struct lightrec_state *state, u32 addr, u32 len);
 __api void lightrec_invalidate_all(struct lightrec_state *state);
 __api void lightrec_set_invalidate_mode(struct lightrec_state *state,
-					_Bool dma_only);
+				bool dma_only);
 
 __api void lightrec_set_exit_flags(struct lightrec_state *state, u32 flags);
 __api u32 lightrec_exit_flags(struct lightrec_state *state);

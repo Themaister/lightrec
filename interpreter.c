@@ -141,6 +141,8 @@ static u32 int_delay_slot(struct interpreter *inter, u32 pc, bool branch)
 	u32 next_pc, ds_next_pc;
 	u32 cause, epc;
 
+	/* RSP does not have exceptions. */
+#ifndef LIGHTREC_N64_RSP
 	if (op->i.op == OP_CP0 && op->r.rs == OP_CP0_RFE) {
 		/* When an IRQ happens, the PSX exception handlers (when done)
 		 * will jump back to the instruction that was executed right
@@ -156,6 +158,7 @@ static u32 int_delay_slot(struct interpreter *inter, u32 pc, bool branch)
 		if (!(cause & 0x7c) && epc == pc - 4)
 			pc -= 4;
 	}
+#endif
 
 	if (inter->delay_slot) {
 		/* The branch opcode was in a delay slot of another branch
@@ -472,6 +475,9 @@ static u32 int_ctc(struct interpreter *inter)
 
 	lightrec_mtc(state, op->c, state->native_reg_cache[op->r.rt]);
 
+#ifdef LIGHTREC_N64_RSP
+	return jump_next(inter);
+#else
 	/* If we have a MTC0 or CTC0 to CP0 register 12 (Status) or 13 (Cause),
 	 * return early so that the emulator will be able to check software
 	 * interrupt status. */
@@ -479,8 +485,10 @@ static u32 int_ctc(struct interpreter *inter)
 		return inter->block->pc + (op->offset + 1) * sizeof(u32);
 	else
 		return jump_next(inter);
+#endif
 }
 
+#ifndef LIGHTREC_N64_RSP
 static u32 int_cp0_RFE(struct interpreter *inter)
 {
 	struct lightrec_state *state = inter->state;
@@ -497,6 +505,7 @@ static u32 int_cp0_RFE(struct interpreter *inter)
 
 	return jump_next(inter);
 }
+#endif
 
 static u32 int_CP(struct interpreter *inter)
 {
@@ -504,12 +513,22 @@ static u32 int_CP(struct interpreter *inter)
 	const struct lightrec_cop_ops *ops;
 	const struct opcode *op = inter->op;
 
+#ifdef LIGHTREC_N64_RSP
+	u32 imm = op->j.imm & ~(1 << 25);
+	u32 vd = (imm >> 6) & 31;
+	u32 vs = (imm >> 11) & 31;
+	u32 vt = (imm >> 16) & 31;
+	u32 e = (imm >> 21) & 15;
+	u32 code = imm & 63;
+	(*state->ops.cop2_vecop)(state, op->opcode, code, vd, vs, vt, e);
+#else
 	if ((op->j.imm >> 25) & 1)
 		ops = &state->ops.cop2_ops;
 	else
 		ops = &state->ops.cop0_ops;
 
 	(*ops->op)(state, (op->j.imm) & ~(1 << 25));
+#endif
 
 	return jump_next(inter);
 }
@@ -1034,7 +1053,9 @@ static const lightrec_int_func_t int_cp0[64] = {
 	[OP_CP0_CFC0]		= int_cfc,
 	[OP_CP0_MTC0]		= int_ctc,
 	[OP_CP0_CTC0]		= int_ctc,
+#ifndef LIGHTREC_N64_RSP
 	[OP_CP0_RFE]		= int_cp0_RFE,
+#endif
 };
 
 static const lightrec_int_func_t int_cp2_basic[64] = {
@@ -1110,6 +1131,7 @@ static u32 lightrec_emulate_block_list(struct block *block, struct opcode *op)
 
 u32 lightrec_emulate_block(struct block *block, u32 pc)
 {
+	fprintf(stderr, "Emulating block: 0x%08x\n", pc);
 	u32 offset = (kunseg(pc) - kunseg(block->pc)) >> 2;
 	struct opcode *op;
 

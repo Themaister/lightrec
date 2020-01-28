@@ -82,8 +82,13 @@ static u32 lightrec_rw_ops(struct lightrec_state *state, union code op,
 static void lightrec_invalidate_map(struct lightrec_state *state,
 		const struct lightrec_mem_map *map, u32 addr)
 {
+#ifdef LIGHTREC_N64_RSP
+	if (map == &state->maps[RSP_MAP_IMEM])
+		state->code_lut[lut_offset(addr)] = NULL;
+#else
 	if (map == &state->maps[PSX_MAP_KERNEL_USER_RAM])
 		state->code_lut[lut_offset(addr)] = NULL;
+#endif
 }
 
 static const struct lightrec_mem_map *
@@ -108,6 +113,7 @@ u32 lightrec_rw(struct lightrec_state *state, union code op,
 	u32 shift, mem_data, mask, pc;
 	uintptr_t new_addr;
 	u32 kaddr;
+	u32 base_addr = addr;
 
 	addr += (s16) op.i.imm;
 	kaddr = kunseg(addr);
@@ -173,11 +179,23 @@ u32 lightrec_rw(struct lightrec_state *state, union code op,
 			lightrec_invalidate_map(state, map, kaddr);
 		return 0;
 	case OP_SWC2:
+	{
+#ifdef LIGHTREC_N64_RSP
+		int16_t simm = op.opcode;
+		simm <<= 9;
+		simm >>= 9;
+		u32 imm = (op.opcode >> 7) & 15;
+		u32 swcop = (op.opcode >> 11) & 31;
+		u32 rt = (op.opcode >> 16) & 31;
+		state->ops.cop2_swc(state, op.opcode, swcop, rt, imm, simm, base_addr);
+#else
 		*(u32 *) new_addr = HTOLE32(state->ops.cop2_ops.mfc(state,
 								    op.i.rt));
+#endif
 		if (!state->invalidate_from_dma_only)
 			lightrec_invalidate_map(state, map, kaddr);
 		return 0;
+	}
 	case OP_LB:
 		return (s32) *(s8 *) new_addr;
 	case OP_LBU:
@@ -199,9 +217,21 @@ u32 lightrec_rw(struct lightrec_state *state, union code op,
 
 		return (data & mask) | (mem_data >> (shift * 8));
 	case OP_LWC2:
+	{
+#ifdef LIGHTREC_N64_RSP
+		int16_t simm = op.opcode;
+		simm <<= 9;
+		simm >>= 9;
+		u32 imm = (op.opcode >> 7) & 15;
+		u32 lwcop = (op.opcode >> 11) & 31;
+		u32 rt = (op.opcode >> 16) & 31;
+		state->ops.cop2_lwc(state, op.opcode, lwcop, rt, imm, simm, base_addr);
+#else
 		state->ops.cop2_ops.mtc(state, op.i.rt,
 					LE32TOH(*(u32 *) new_addr));
+#endif
 		return 0;
+	}
 	case OP_LW:
 	default:
 		return LE32TOH(*(u32 *) new_addr);
@@ -253,6 +283,19 @@ static void lightrec_rw_generic_cb(struct lightrec_state *state,
 
 u32 lightrec_mfc(struct lightrec_state *state, union code op)
 {
+#ifdef LIGHTREC_N64_RSP
+	if (op.i.op == OP_CP0 && op.r.rs == OP_CP0_MFC0)
+		return (*state->ops.cop0_mfc)(state, op.r.rd);
+	else if (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_MFC2)
+		return (*state->ops.cop2_mfc)(state, op.opcode, op.r.rd, (op.opcode >> 7) & 15);
+	else if (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_CFC2)
+		return (*state->ops.cop2_cfc)(state, op.opcode, op.r.rd);
+	else
+	{
+		/* There is no CFC0 on RSP, just return 0. */
+		return 0;
+	}
+#else
 	bool is_cfc = (op.i.op == OP_CP0 && op.r.rs == OP_CP0_CFC0) ||
 		      (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_CFC2);
 	u32 (*func)(struct lightrec_state *, u8);
@@ -269,6 +312,7 @@ u32 lightrec_mfc(struct lightrec_state *state, union code op)
 		func = ops->mfc;
 
 	return (*func)(state, op.r.rd);
+#endif
 }
 
 static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
@@ -281,6 +325,14 @@ static void lightrec_mfc_cb(struct lightrec_state *state, union code op)
 
 void lightrec_mtc(struct lightrec_state *state, union code op, u32 data)
 {
+#ifdef LIGHTREC_N64_RSP
+	if (op.i.op == OP_CP0 && op.r.rs == OP_CP0_MTC0)
+		(*state->ops.cop0_mtc)(state, data, op.r.rd);
+	else if (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_MTC2)
+		(*state->ops.cop2_mtc)(state, op.opcode, data, op.r.rd, (op.opcode >> 7) & 15);
+	else if (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_CTC2)
+		(*state->ops.cop2_ctc)(state, op.opcode, data, op.r.rd);
+#else
 	bool is_ctc = (op.i.op == OP_CP0 && op.r.rs == OP_CP0_CTC0) ||
 		      (op.i.op == OP_CP2 && op.r.rs == OP_CP2_BASIC_CTC2);
 	void (*func)(struct lightrec_state *, u8, u32);
@@ -297,6 +349,7 @@ void lightrec_mtc(struct lightrec_state *state, union code op, u32 data)
 		func = ops->mtc;
 
 	(*func)(state, op.r.rd, data);
+#endif
 }
 
 static void lightrec_mtc_cb(struct lightrec_state *state, union code op)
@@ -304,6 +357,7 @@ static void lightrec_mtc_cb(struct lightrec_state *state, union code op)
 	lightrec_mtc(state, op, state->native_reg_cache[op.r.rt]);
 }
 
+#ifndef LIGHTREC_N64_RSP
 static void lightrec_rfe_cb(struct lightrec_state *state, union code op)
 {
 	u32 status;
@@ -317,9 +371,19 @@ static void lightrec_rfe_cb(struct lightrec_state *state, union code op)
 	/* Write it back */
 	state->ops.cop0_ops.ctc(state, 12, status);
 }
+#endif
 
 static void lightrec_cp_cb(struct lightrec_state *state, union code op)
 {
+#ifdef LIGHTREC_N64_RSP
+	u32 imm = op.j.imm & ~(1 << 25);
+	u32 vd = (imm >> 6) & 31;
+	u32 vs = (imm >> 11) & 31;
+	u32 vt = (imm >> 16) & 31;
+	u32 e = (imm >> 21) & 15;
+	u32 code = imm & 63;
+	(*state->ops.cop2_vecop)(state, op.opcode, code, vd, vs, vt, e);
+#else
 	void (*func)(struct lightrec_state *, u32);
 
 	if ((op.opcode >> 25) & 1)
@@ -328,6 +392,7 @@ static void lightrec_cp_cb(struct lightrec_state *state, union code op)
 		func = state->ops.cop0_ops.op;
 
 	(*func)(state, op.opcode);
+#endif
 }
 
 static void lightrec_syscall_cb(struct lightrec_state *state, union code op)
@@ -606,10 +671,16 @@ static struct block * generate_dispatcher(struct lightrec_state *state)
 	/* Jump to end if state->target_cycle < state->current_cycle */
 	to_end = jit_blei(LIGHTREC_REG_CYCLE, 0);
 
+#ifdef LIGHTREC_N64_RSP
+	/* RSP IMEM is 4kB and only the lower 12 bits of PC matter. Just mask it. */
+	jit_andi(JIT_R0, JIT_V0, 0xffc);
+	(void)to_c;
+#else
 	/* Convert next PC to KUNSEG and avoid mirrors */
 	ram_len = state->maps[PSX_MAP_KERNEL_USER_RAM].length;
 	jit_andi(JIT_R0, JIT_V0, 0x10000000 | (ram_len - 1));
 	to_c = jit_bgei(JIT_R0, ram_len);
+#endif
 
 	/* Fast path: code is running from RAM, use the code LUT */
 #if __WORDSIZE == 64
@@ -621,8 +692,11 @@ static struct block * generate_dispatcher(struct lightrec_state *state)
 	/* If we get non-NULL, loop */
 	jit_patch_at(jit_bnei(JIT_R0, 0), loop);
 
+	/* There is no slow path for RSP, since it's always executing from IMEM. */
+#ifndef LIGHTREC_N64_RSP
 	/* Slow path: call C function get_next_block_func() */
 	jit_patch(to_c);
+#endif
 
 	if (ENABLE_FIRST_PASS) {
 		/* We may call the interpreter - update state->current_cycle */
@@ -727,7 +801,12 @@ static struct block * lightrec_precompile_block(struct lightrec_state *state,
 	struct block *block;
 	const u32 *code;
 	u32 addr, kunseg_pc = kunseg(pc);
+
+#ifdef LIGHTREC_N64_RSP
+	const struct lightrec_mem_map *map = &state->maps[RSP_MAP_IMEM];
+#else
 	const struct lightrec_mem_map *map = lightrec_get_map(state, kunseg_pc);
+#endif
 	unsigned int length;
 
 	if (!map)
@@ -1008,6 +1087,7 @@ struct lightrec_state * lightrec_init(char *argv0,
 {
 	struct lightrec_state *state;
 
+#ifndef LIGHTREC_N64_RSP
 	/* Sanity-check ops */
 	if (!ops ||
 	    !ops->cop0_ops.mfc || !ops->cop0_ops.cfc || !ops->cop0_ops.mtc ||
@@ -1017,6 +1097,7 @@ struct lightrec_state * lightrec_init(char *argv0,
 		pr_err("Missing callbacks in lightrec_ops structure\n");
 		return NULL;
 	}
+#endif
 
 	init_jit(argv0);
 
@@ -1075,9 +1156,11 @@ struct lightrec_state * lightrec_init(char *argv0,
 	if (!state->mtc_wrapper)
 		goto err_free_mfc_wrapper;
 
+#ifndef LIGHTREC_N64_RSP
 	state->rfe_wrapper = generate_wrapper(state, lightrec_rfe_cb, false);
 	if (!state->rfe_wrapper)
 		goto err_free_mtc_wrapper;
+#endif
 
 	state->cp_wrapper = generate_wrapper(state, lightrec_cp_cb, false);
 	if (!state->cp_wrapper)
@@ -1097,11 +1180,14 @@ struct lightrec_state * lightrec_init(char *argv0,
 	state->rw_func = state->rw_wrapper->function;
 	state->mfc_func = state->mfc_wrapper->function;
 	state->mtc_func = state->mtc_wrapper->function;
+#ifndef LIGHTREC_N64_RSP
 	state->rfe_func = state->rfe_wrapper->function;
+#endif
 	state->cp_func = state->cp_wrapper->function;
 	state->syscall_func = state->syscall_wrapper->function;
 	state->break_func = state->break_wrapper->function;
 
+#ifndef LIGHTREC_N64_RSP
 	map = &state->maps[PSX_MAP_BIOS];
 	state->offset_bios = (uintptr_t)map->address - map->pc;
 
@@ -1115,6 +1201,7 @@ struct lightrec_state * lightrec_init(char *argv0,
 	    state->maps[PSX_MAP_MIRROR2].address == map->address + 0x400000 &&
 	    state->maps[PSX_MAP_MIRROR3].address == map->address + 0x600000)
 		state->mirrors_mapped = true;
+#endif
 
 	return state;
 
@@ -1123,7 +1210,9 @@ err_free_syscall_wrapper:
 err_free_cp_wrapper:
 	lightrec_free_block(state->cp_wrapper);
 err_free_rfe_wrapper:
+#ifndef LIGHTREC_N64_RSP
 	lightrec_free_block(state->rfe_wrapper);
+#endif
 err_free_mtc_wrapper:
 	lightrec_free_block(state->mtc_wrapper);
 err_free_mfc_wrapper:
@@ -1166,7 +1255,9 @@ void lightrec_destroy(struct lightrec_state *state)
 	lightrec_free_block(state->rw_wrapper);
 	lightrec_free_block(state->mfc_wrapper);
 	lightrec_free_block(state->mtc_wrapper);
+#ifndef LIGHTREC_N64_RSP
 	lightrec_free_block(state->rfe_wrapper);
+#endif
 	lightrec_free_block(state->cp_wrapper);
 	lightrec_free_block(state->syscall_wrapper);
 	lightrec_free_block(state->break_wrapper);
@@ -1182,6 +1273,10 @@ void lightrec_destroy(struct lightrec_state *state)
 
 void lightrec_invalidate(struct lightrec_state *state, u32 addr, u32 len)
 {
+#ifdef LIGHTREC_N64_RSP
+	u32 kaddr = kunseg(addr & ~0x3);
+	lightrec_invalidate_map(state, &state->maps[RSP_MAP_IMEM], kaddr);
+#else
 	u32 kaddr = kunseg(addr & ~0x3);
 	const struct lightrec_mem_map *map = lightrec_get_map(state, kaddr);
 
@@ -1200,6 +1295,7 @@ void lightrec_invalidate(struct lightrec_state *state, u32 addr, u32 len)
 
 		lightrec_invalidate_map(state, map, kaddr);
 	}
+#endif
 }
 
 void lightrec_invalidate_all(struct lightrec_state *state)

@@ -13,6 +13,7 @@
  */
 
 #include "config.h"
+#include <assert.h>
 
 #if ENABLE_DISASSEMBLER
 #include <dis-asm.h>
@@ -47,11 +48,15 @@ static bool is_unconditional_jump(const struct opcode *op)
 
 static bool is_syscall(const struct opcode *op)
 {
+#ifdef LIGHTREC_N64_RSP
+	return op->i.op == OP_SPECIAL && op->r.op == OP_SPECIAL_BREAK;
+#else
 	return (op->i.op == OP_SPECIAL && (op->r.op == OP_SPECIAL_SYSCALL ||
 					   op->r.op == OP_SPECIAL_BREAK)) ||
 		(op->i.op == OP_CP0 && (op->r.rs == OP_CP0_MTC0 ||
 					op->r.rs == OP_CP0_CTC0) &&
 		 (op->r.rd == 12 || op->r.rd == 13));
+#endif
 }
 
 void lightrec_free_opcode_list(struct lightrec_state *state, struct opcode *list)
@@ -73,6 +78,9 @@ struct opcode * lightrec_disassemble(struct lightrec_state *state,
 	struct opcode *curr, *last;
 	unsigned int i;
 
+	unsigned base_offset = src - (const u32 *)state->maps[RSP_MAP_IMEM].address;
+	src = (const u32 *)state->maps[RSP_MAP_IMEM].address;
+
 	for (i = 0, last = NULL; ; i++, last = curr) {
 		curr = lightrec_calloc(state, MEM_FOR_IR, sizeof(*curr));
 		if (!curr) {
@@ -87,7 +95,7 @@ struct opcode * lightrec_disassemble(struct lightrec_state *state,
 			last->next = curr;
 
 		/* TODO: Take care of endianness */
-		curr->opcode = LE32TOH(*src++);
+		curr->opcode = LE32TOH(src[base_offset++ & 1023]);
 		curr->offset = i;
 
 		/* NOTE: The block disassembly ends after the opcode that
@@ -100,6 +108,8 @@ struct opcode * lightrec_disassemble(struct lightrec_state *state,
 
 	if (len)
 		*len = (i + 1) * sizeof(u32);
+
+	//assert((base_offset + *len) <= 0x1000 / 4);
 
 	return head;
 }

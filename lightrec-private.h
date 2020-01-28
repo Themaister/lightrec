@@ -51,10 +51,16 @@
 #define BLOCK_SHOULD_RECOMPILE	BIT(1)
 #define BLOCK_FULLY_TAGGED	BIT(2)
 
+#ifdef LIGHTREC_N64_RSP
+#define RAM_SIZE	   0x1000
+#define IRAM_SIZE	   0x1000
+#define BIOS_SIZE	   0
+#define CODE_LUT_SIZE  (IRAM_SIZE >> 2)
+#else
 #define RAM_SIZE	0x200000
 #define BIOS_SIZE	0x80000
-
 #define CODE_LUT_SIZE	((RAM_SIZE + BIOS_SIZE) >> 2)
+#endif
 
 /* Definition of jit_state_t (avoids inclusion of <lightning.h>) */
 struct jit_node;
@@ -133,18 +139,26 @@ void lightrec_free_block(struct block *block);
 
 static inline u32 kunseg(u32 addr)
 {
+#ifdef LIGHTREC_N64_RSP
+	return addr & 0xfffu;
+#else
 	if (unlikely(addr >= 0xa0000000))
 		return addr - 0xa0000000;
 	else
 		return addr &~ 0x80000000;
+#endif
 }
 
 static inline u32 lut_offset(u32 pc)
 {
+#ifdef LIGHTREC_N64_RSP
+	return (pc & 0xfffu) >> 2;
+#else
 	if (pc & BIT(28))
 		return ((pc & (BIOS_SIZE - 1)) + RAM_SIZE) >> 2; // BIOS
 	else
 		return (pc & (RAM_SIZE - 1)) >> 2; // RAM
+#endif
 }
 
 void lightrec_mtc(struct lightrec_state *state, union code op, u32 data);
